@@ -1,41 +1,244 @@
-# Compiled Lua sources
-luac.out
+local esp_settings = {
+    players = {},
+    objects = {},
+    flags = {},
+    
+    enabled = true,
+    ai = false,
+    team_check = false,
+    use_display_names = false,
 
-# luarocks build files
-*.src.rock
-*.zip
-*.tar.gz
+    drawings = {
+        name = {enabled = true, color = Color3.fromRGB(255, 255, 255)},
+        box = {enabled = true, color = Color3.fromRGB(255, 255, 255)},
+        health_bar = {enabled = true},
+        health_text = {enabled = true, color = Color3.fromRGB(255, 255, 255)},
+        distance = {enabled = true, color = Color3.fromRGB(255, 255, 255)},
+        weapon = {enabled = true, color = Color3.fromRGB(255, 255, 255)}
+    }
+}
 
-# Object files
-*.o
-*.os
-*.ko
-*.obj
-*.elf
+local CreateRenderObject = getupvalue(Drawing.new, 1)
+local SetRenderProperty = getupvalue(getupvalue(Drawing.new, 7).__newindex, 4)
+local GetRenderProperty = getupvalue(getupvalue(Drawing.new, 7).__index, 4)
+local DestoryRenderObject = getupvalue(getupvalue(Drawing.new, 7).__index, 3)
 
-# Precompiled Headers
-*.gch
-*.pch
+local esp_utility = {} do
+    esp_utility.drawings = {}
+    esp_utility.connections = {}
 
-# Libraries
-*.lib
-*.a
-*.la
-*.lo
-*.def
-*.exp
+    function esp_utility:draw(object, properties)
+        local drawing = CreateRenderObject(object)
+        for i,v in pairs(properties) do
+            SetRenderProperty(drawing, i, v)
+        end
+        esp_utility.drawings[drawing] = drawing
+        return drawing
+    end
 
-# Shared objects (inc. Windows DLLs)
-*.dll
-*.so
-*.so.*
-*.dylib
+    function esp_utility:connection(signal, callback)
+        local con = signal:Connect(callback)
+        esp_utility.connections[con] = con
+        return con
+    end
 
-# Executables
-*.exe
-*.out
-*.app
-*.i*86
-*.x86_64
-*.hex
+    function esp_utility:calculate_bounding_box(v)
+        local cam = workspace.CurrentCamera.CFrame
+        local torso = v.HumanoidRootPart.CFrame
+        local head = v.Head.CFrame
+        local top, top_isrendered = workspace.CurrentCamera:WorldToViewportPoint(head.Position + (torso.UpVector * 1))
+        local bottom, bottom_isrendered = workspace.CurrentCamera:WorldToViewportPoint(torso.Position - (torso.UpVector * 2) - cam.UpVector)
 
+        local minY = math.abs(bottom.y - top.y)
+        local sizeX = math.ceil(math.max(math.clamp(math.abs(bottom.x - top.x) * 2.5, 0, minY), minY / 1.35, 6))
+        local sizeY = math.ceil(math.max(minY, sizeX * 0.5, 10))
+
+        if top_isrendered or bottom_isrendered then
+            local boxtop = Vector2.new(math.floor(top.x * 0.5 + bottom.x * 0.5 - sizeX * 0.5), math.floor(math.min(top.y, bottom.y)))
+            local boxsize = Vector2.new(sizeX, sizeY)
+            return boxtop, boxsize 
+        end
+    end
+
+    function esp_utility.get_character(v)
+        local character = v.Character
+        if character then
+            local head = character:FindFirstChild("Head")
+            local torso = character:FindFirstChild("HumanoidRootPart")
+            if head and torso then
+                return character
+            end
+        end
+    end
+
+    function esp_utility.get_health(v)
+        local character = esp_utility.get_character(v)
+        if character then
+            local humanoid = character:FindFirstChildOfClass("Humanoid")
+            if humanoid then
+                return humanoid.Health, humanoid.MaxHealth
+            end
+        end
+    end
+
+    function esp_utility.is_alive(v)
+        local character = esp_utility.get_character(v)
+        if character then
+            local health, max_health = esp_utility.get_health(v)
+            if health and max_health then
+                if health > 0 then
+                    return true
+                end
+            end
+        end
+    end
+
+    function esp_utility.get_tool(v)
+        local character = esp_utility.get_character(v)
+        if character then
+            local tool = character:FindFirstChildOfClass("Tool")
+            if tool then
+                return tostring(tool)
+            end
+            return ""
+        end
+    end
+
+    function esp_utility.team_check(v)
+        if game.Players.LocalPlayer.Team == v.Team then
+            return false
+        end
+        return true
+    end
+    
+    function esp_utility:new_player(plr)
+        esp_settings.players[plr] = {
+            name = esp_utility:draw("Text", {Text = "OnlyTwentyCharacters", Font = 2, Size = 13, Center = true, Outline = true, Color = Color3.fromRGB(255, 255, 255), ZIndex = -100}),
+            tool = esp_utility:draw("Text", {Text = "None", Font = 2, Size = 13, Center = true, Outline = true, Color = Color3.fromRGB(255, 255, 255), ZIndex = -100}),
+            health_text = esp_utility:draw("Text", {Text = "100", Font = 2, Size = 13, Center = true, Outline = true, Color = Color3.fromRGB(255, 255, 255), ZIndex = -98}),
+            distance = esp_utility:draw("Text", {Text = "", Font = 2, Size = 13, Center = true, Outline = true, Color = Color3.fromRGB(255, 255, 255), ZIndex = -100}),
+            weapon = esp_utility:draw("Text", {Text = "", Font = 2, Size = 13, Center = true, Outline = true, Color = Color3.fromRGB(255, 255, 255), ZIndex = -100}),
+            box_outline = esp_utility:draw("Square", {Color = Color3.fromRGB(0, 0, 0), Thickness = 3, ZIndex = -100}),
+            box = esp_utility:draw("Square", {Color = Color3.fromRGB(255, 255, 255), Thickness = 1, ZIndex = -99}),
+            health_outline = esp_utility:draw("Line", {Thickness = 3, Color = Color3.fromRGB(0, 0, 0), ZIndex = -100}),
+            health = esp_utility:draw("Line", {Thickness = 1, Color = Color3.fromRGB(0, 255, 0), ZIndex = -99})
+        }
+    end
+
+    function esp_utility:update()
+        for plr,esp in pairs(esp_settings.players) do
+            if (plr.Parent == game.Players and esp_settings.enabled and (esp_settings.team_check and esp_utility.team_check(plr) or not esp_settings.team_check)) or plr.Parent ~= game.Players and esp_settings.ai then
+                local character = esp_utility.get_character(plr)
+                local is_alive = esp_utility.is_alive(plr)
+                local health, max_health = esp_utility.get_health(plr)
+                local weapon_equipped = esp_utility.get_tool(plr)
+                if character and is_alive then
+                    local _, onScreen = workspace.CurrentCamera:WorldToViewportPoint(character.PrimaryPart.Position)
+                    if onScreen then
+                        local BoxPos, BoxSize = esp_utility:calculate_bounding_box(character)
+                        if BoxPos and BoxSize then
+                            local BottomOffset = 0
+                            do --// Box
+                                SetRenderProperty(esp.box, "Position", BoxPos)
+                                SetRenderProperty(esp.box, "Size", Vector2.new(BoxSize.X, BoxSize.Y))
+                                SetRenderProperty(esp.box, "Color", esp_settings.drawings.box.color)
+
+                                SetRenderProperty(esp.box_outline, "Position", GetRenderProperty(esp.box, "Position"))
+                                SetRenderProperty(esp.box_outline, "Size", GetRenderProperty(esp.box, "Size"))
+
+                                SetRenderProperty(esp.box, "Visible", esp_settings.drawings.box.enabled)
+                                SetRenderProperty(esp.box_outline, "Visible", esp_settings.drawings.box.enabled)
+                            end
+    
+                            do --// Name
+                                SetRenderProperty(esp.name, "Text", plr.Parent == game.Players and esp_settings.use_display_names and plr.DisplayName or plr.Name)
+                                SetRenderProperty(esp.name, "Position", BoxPos + Vector2.new(BoxSize.X/2, -GetRenderProperty(esp.name, "TextBounds").Y - 2))
+                                SetRenderProperty(esp.name, "Color", esp_settings.drawings.name.color)
+
+                                SetRenderProperty(esp.name, "Visible", esp_settings.drawings.name.enabled)
+                            end
+    
+                            do --// Health
+                                SetRenderProperty(esp.health, "From", Vector2.new((BoxPos.X - GetRenderProperty(esp.health_outline, "Thickness") - 1), BoxPos.Y + BoxSize.Y))
+                                SetRenderProperty(esp.health, "To", Vector2.new(GetRenderProperty(esp.health, "From").X, GetRenderProperty(esp.health, "From").Y - (health / max_health) * BoxSize.Y))
+                                SetRenderProperty(esp.health, "Color", Color3.fromRGB(255, 0, 0):Lerp(Color3.fromRGB(0,255,0), health / max_health))
+
+                                SetRenderProperty(esp.health_outline, "From", GetRenderProperty(esp.health, "From") + Vector2.new(0, 1))
+                                SetRenderProperty(esp.health_outline, "To", Vector2.new(GetRenderProperty(esp.health_outline, "From").X, BoxPos.Y - 1))
+
+                                SetRenderProperty(esp.health, "Visible", esp_settings.drawings.health_bar.enabled)
+                                SetRenderProperty(esp.health_outline, "Visible", esp_settings.drawings.health_bar.enabled)
+                            end
+    
+                            do --// Health Text
+                                SetRenderProperty(esp.health_text, "Text", tostring(math.floor(health)))
+                                SetRenderProperty(esp.health_text, "Position", Vector2.new((BoxPos.X - GetRenderProperty(esp.health_outline, "Thickness") - 1), BoxPos.Y + BoxSize.Y - (health / max_health) * BoxSize.Y) + Vector2.new(-GetRenderProperty(esp.name, "TextBounds").Y, 0))
+                                SetRenderProperty(esp.health_text, "Color", esp_settings.drawings.health_text.color)
+
+                                SetRenderProperty(esp.health_text, "Visible", esp_settings.drawings.health_text.enabled)
+                            end
+
+                            do --// Distance
+                                SetRenderProperty(esp.distance, "Text", tostring(math.round((character.PrimaryPart.Position - workspace.CurrentCamera.CFrame.p).Magnitude / 3)) .. " meters")
+                                SetRenderProperty(esp.distance, "Position", BoxPos + Vector2.new(BoxSize.X/2, BoxSize.Y + 1))
+                                SetRenderProperty(esp.distance, "Color", esp_settings.drawings.distance.color)
+                                BottomOffset = BottomOffset + (esp_settings.drawings.distance.enabled and 13) or 0
+
+                                SetRenderProperty(esp.distance, "Visible", esp_settings.drawings.distance.enabled)
+                            end
+    
+                            do --// Weapon
+                                SetRenderProperty(esp.weapon, "Text", weapon_equipped)
+                                SetRenderProperty(esp.weapon, "Position", BoxPos + Vector2.new(BoxSize.X/2, BoxSize.Y + BottomOffset))
+                                SetRenderProperty(esp.weapon, "Color", esp_settings.drawings.weapon.color)
+
+                                SetRenderProperty(esp.weapon, "Visible", esp_settings.drawings.weapon.enabled)
+                            end
+
+                        else
+                            for _,v in pairs(esp) do
+                                SetRenderProperty(v, "Visible", false)
+                            end
+                        end
+                    else
+                        for _,v in pairs(esp) do
+                            SetRenderProperty(v, "Visible", false)
+                        end
+                    end
+                else
+                    for _,v in pairs(esp) do
+                        SetRenderProperty(v, "Visible", false)
+                    end
+                end
+            else
+                for _,v in pairs(esp) do
+                    SetRenderProperty(v, "Visible", false)
+                end
+            end
+        end
+    end
+end
+
+for _,v in pairs(game.Players:GetPlayers()) do
+    if v ~= game.Players.LocalPlayer then
+        esp_utility:new_player(v)
+    end
+end
+
+esp_utility:connection(game.Players.PlayerAdded, function(player)
+    esp_utility:new_player(player)
+end)
+
+esp_utility:connection(game.Players.PlayerRemoving, function(player)
+    for i,v in pairs(esp_settings.players[player]) do
+        DestoryRenderObject(v)
+        esp_settings.players[player] = nil
+    end
+end)
+
+esp_utility:connection(game.RunService.RenderStepped, function()
+    esp_utility:update()
+end)
+
+getgenv().esp_settings = esp_settings
+getgenv().esp_utility = esp_utility
